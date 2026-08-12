@@ -4,6 +4,11 @@ SWEP = SWEP or {}
 SWEP.Primary = SWEP.Primary or {}
 SWEP.Secondary = SWEP.Secondary or {}
 
+lololo = lololo or {}
+lololo.config = lololo.config or {}
+lololo.doors = lololo.doors or {}
+
+
 if SERVER then
     AddCSLuaFile('shared.lua')
     resource.AddFile('sound/lockpick/broken.wav')
@@ -17,8 +22,10 @@ if SERVER then
     util.AddNetworkString('lololo.ply.freeze')
     util.AddNetworkString('lololo.funcs.reload')
     util.AddNetworkString('lololo.funcs.gameStatus')
+    util.AddNetworkString('lololo.funcs.gameStart')
     util.AddNetworkString('lololo.emitSound')
     util.AddNetworkString('lololo.sync.speed')
+    util.AddNetworkString('lololo.funcs.setPinCount')
 
 
     net.Receive('lololo.funcs.reload', function(len, ply)
@@ -39,25 +46,38 @@ if SERVER then
 
     net.Receive('lololo.funcs.gameStatus', function(len, ply)
         if not IsValid(ply) then return end
+        local isSuccess = net.ReadBool()
         local weapon = ply:GetActiveWeapon()
 
         if IsValid(weapon) and weapon:GetClass() == 'lockpick' then
             ply:Freeze(false)
             weapon.isInGame = false
         end
+
+        if isSuccess then
+            local ent = weapon.lockpickedEnt
+            if not IsValid(ent) then return end
+
+            ent:keysUnLock()
+        end
+
+        weapon.NextStrike = CurTime() + 5 -- СДЕЛАЙ ПО КОНФИГУ
+        weapon.lockpickedEnt = nil
     end)
 end
 
 
 
 if CLIENT then
-    lololo = lololo or {}
-
     net.Receive('lololo.sync.speed', function(len, ply)
         local newSpeed = net.ReadInt(8)
         lololo.speed = newSpeed
     end)
 
+    net.Receive('lololo.funcs.gameStart', function(len, ply)
+        local pinCount = net.ReadInt(8)
+        lololo.startGame(pinCount)
+    end)
 
     SWEP.PrintName = 'Отмычка'
     SWEP.Slot = 5
@@ -109,6 +129,7 @@ function SWEP:Initialize()
     self.speed = self.speed or 1
     self.isSpeedChange = self.isSpeedChange or false
     self.isInGame = self.isInGame or false
+    self.lockpickedEnt = self.lockpickedEnt or nil
 
     if CLIENT then
         lololo.speed = lololo.speed or 1
@@ -117,17 +138,35 @@ end
 
 
 
-function SWEP:PrimaryAttack() -- проверяй дверь ли, проверяй в списке замков и бери пинкаунт оттуда
-    self.NextStrike = CurTime() + 1
+function SWEP:PrimaryAttack()
+    if CurTime() < self.NextStrike then return end
+    self.NextStrike = CurTime() + lololo.config.nextHit
 
     if SERVER then
         local ply = self.Owner
         if not IsValid(ply) then return end
 
+        local targetEnt = ply:GetEyeTrace().Entity
+        if not IsValid(targetEnt) then return end
+
+        if ply:EyePos():Distance(targetEnt:GetPos()) > 90 or targetEnt:getKeysNonOwnable() then return end
+
+        local value = lololo.doors[targetEnt:EntIndex()]
+        local pinCount = value or lololo.config.defaultPinCount
+
         self.isInGame = true
+        self.lockpickedEnt = targetEnt
         ply:Freeze(true)
-        ply:SendLua('lololo.startGame()')
+
+        net.Start('lololo.funcs.gameStart')
+            net.WriteInt(pinCount, 8)
+        net.Send(ply)
     end
+end
+
+
+
+function SWEP:SecondaryAttack()
 end
 
 
@@ -176,7 +215,7 @@ function SWEP:OnRemove()
 
     if CLIENT then
         hook.Remove('KeyRelease', 'lololo.reload.buttonUnpress' .. self:EntIndex())
-        lololo.clearAll()
+        lololo.isGameFinishSuccess(false)
     end
 end
 
@@ -192,7 +231,7 @@ function SWEP:Holster()
 
     if CLIENT then
         hook.Remove('KeyRelease', 'lololo.reload.buttonUnpress' .. self:EntIndex())
-        lololo.clearAll()
+        lololo.isGameFinishSuccess(false)
     end
 
     return true
@@ -207,12 +246,13 @@ end
 if CLIENT then
     local ply = LocalPlayer()
 
-    function lololo.clearAll()
+    function lololo.isGameFinishSuccess(isSuccess)
         hook.Remove('HUDPaint', 'lololo.menuCreate.hook')
         hook.Remove('HUDPaint', 'lololo.pins.draw')
         hook.Remove('CreateMove', 'lololo.clockwiseChange')
 
         net.Start('lololo.funcs.gameStatus')
+            net.WriteBool(isSuccess)
         net.SendToServer()
     end
 
@@ -226,39 +266,39 @@ if CLIENT then
 
 
 
-    function lololo.startGame()
-        local pinCount = 1 -- УДАЛИТЬ НАХУЙ
-
+    function lololo.startGame(pinCount)
         local angle = 0
         local clockwise = true
         local lockAttack = false
-        --local attackLock = false
-        local deathZonePin = 5 -- СДЕЛАЙ ЧЕРЕЗ КФГ НАСТРОЙКУ ВСЕХ ЭТИХ ТИПОВ
-        local forDelete = pinCount --!!!!!!!!!!!!!!
-        local lockpickCount = 100 -- СДЕЛАЙ ЧЕРЕЗ КФГ НАСТРОЙКУ ВСЕХ ЭТИХ ТИПОВ
+        local deathZonePin = lololo.config.deathZonePin
+        local forDelete = pinCount
+        local lockpickCount = lololo.config.lockpickCount
         local isHit = false
 
         local centerX = ScrW() / 2
         local centerY = ScrH() / 2
 
-        local interval = 15 -- СДЕЛАЙ ЧЕРЕЗ КФГ НАСТРОЙКУ ВСЕХ ЭТИХ ТИПОВ
+        local interval = 15
 
         local function pinAnglesCreate() -- ФАНТОМНЫЕ ПИНИ ИЛИ НЕ РЕГАЕТ!!!!
             local pinAngles = {}
+            local ang
+            local isValid = false
 
-            for i = 1, pinCount do --!!!!!!!!!!!!
-                local ang
+            for i = 1, pinCount do
                 while true do
                     ang = math.random(1, 360)
-                    local isValid = true
+                    isValid = true
                     for _, v in ipairs(pinAngles) do
                         if math.abs(ang - v) <= interval then
                             isValid = false
                             break
                         end
                     end
+
                     if isValid then
-                        table.insert(pinAngles, ang)
+                        -- table.insert(pinAngles, ang)
+                        pinAngles[#pinAngles + 1] = ang
                         break
                     end
                 end
@@ -268,6 +308,8 @@ if CLIENT then
         end
 
         local pinAngles = pinAnglesCreate()
+        PrintTable(pinAngles)  -- дебаг принт
+        print('------')
 
         local function menuCreate()
             draw.RoundedBox(0, 0, 0, 2000, 2000, Color(92, 154, 190, 240))
@@ -280,55 +322,66 @@ if CLIENT then
 
             draw.RotatedBox(posX, posY, 50, 12, angle, Color(34, 34, 34))
 
-            hook.Add('CreateMove', 'lololo.clockwiseChange', function(cmd)
-                if cmd:KeyDown(IN_ATTACK) then
-                    if not lockAttack then
-                        clockwise = not clockwise 
+            local toRemove = -1 -- TESTTT
 
-                        local attackAngle_min = angle - deathZonePin
-                        local attackAngle_max = angle + deathZonePin
+            hook.Add('Think', 'lololo.clockwiseChange', function() -- добавь в очистку
+                if LocalPlayer():KeyPressed(IN_ATTACK) and not lockAttack then
+                    clockwise = not clockwise 
 
-                        for k, v in ipairs(pinAngles) do
-                            if v >= attackAngle_min and v <= attackAngle_max then
-                                table.remove(pinAngles, k)
-                                table.insert(pinAngles, k, nil)
-                                forDelete = forDelete - 1
-                                isHit = true
+                    local attackAngle_min = angle - deathZonePin
+                    local attackAngle_max = angle + deathZonePin
 
-                                net.Start('lololo.emitSound')
-                                    net.WriteString('lololo.pin')
-                                net.SendToServer()
-                            end
-                        end
+                    for k, v in ipairs(pinAngles) do
+                        if v >= attackAngle_min and v <= attackAngle_max then
+                            toRemove = k
+                            --table.remove(pinAngles, k)
+                            --pinAngles[k] = nil
+                            --table.insert(pinAngles, k, nil)
+                            isHit = true
 
-                        if not isHit then
-                            lockpickCount = lockpickCount - 1
-                        end
+                            print('Ударил по: ' .. angle) -- дебаг принт
 
-                        if forDelete <= 0 then
-                            lololo.clearAll()
                             net.Start('lololo.emitSound')
-                                net.WriteString('lololo.success')
+                                net.WriteString('lololo.pin')
                             net.SendToServer()
+                                
+                            break
                         end
-
-                        if lockpickCount <= 0 then
-                            lololo.clearAll()
-                            net.Start('lololo.emitSound')
-                                net.WriteString('lololo.broken')
-                            net.SendToServer()
-                        end
-
-                        isHit = false
-                        lockAttack = true
                     end
 
-                else
-                    lockAttack = false 
+                    if isHit then
+                        table.remove(pinAngles, k)
+                        toRemove = -1
+                        forDelete = forDelete - 1
+
+                    else
+                        print('Не попал по: ' .. angle) -- debug print
+                        print('Минимум: ' .. attackAngle_min .. ' Максимум: ' .. attackAngle_max)
+                        lockpickCount = lockpickCount - 1
+                    end
+
+                    if forDelete <= 0 then -- закончились пины
+                        net.Start('lololo.emitSound')
+                            net.WriteString('lololo.success')
+                        net.SendToServer()
+                        lololo.isGameFinishSuccess(true)
+                    end
+
+                    if lockpickCount <= 0 then -- закончились отмычки
+                        net.Start('lololo.emitSound')
+                            net.WriteString('lololo.broken')
+                        net.SendToServer()
+                        lololo.isGameFinishSuccess(false)
+                    end
+
+                    isHit = false
+                    lockAttack = true
                 end
 
-                if cmd:KeyDown(IN_ATTACK2) then
-                    lololo.clearAll()
+                lockAttack = false
+
+                if ply:KeyPressed(IN_ATTACK2) then
+                    lololo.isGameFinishSuccess(false)
                 end
             end)
 
@@ -347,6 +400,8 @@ if CLIENT then
             end
 
 
+            --print('Текущий: ' .. angle) -- дебаг принт
+
             draw.RoundedBox(360, ScrW()/2 - 90, ScrH()/2 - 90, 180, 180, Color(0, 161, 255, 255))
 
             draw.SimpleText('ЛКМ — Подвигать пин', 'CreditsText', centerX + 220, centerY - 50, Color(74, 228, 255))
@@ -355,7 +410,7 @@ if CLIENT then
         end
 
         hook.Add('HUDPaint', 'lololo.pins.draw', function()
-            for i = 1, pinCount do --!!!!!!!!!!!!!!!!!!!!!
+            for i = 1, pinCount do
                 local pinAngle = pinAngles[i]
                 if pinAngle ~= nil then
                     local posX = centerX + math.cos(math.rad(-pinAngle)) * 100
