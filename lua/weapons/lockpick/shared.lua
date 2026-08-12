@@ -19,7 +19,7 @@ if SERVER then
     sound.Add({name = 'lololo.success', channel = CHAN_AUTO, volume = 1, level = 80, sound = 'lockpick/success.wav'})
     sound.Add({name = 'lololo.pin', channel = CHAN_AUTO, volume = 1, level = 80, sound = 'lockpick/pin.wav'})
 
-    util.AddNetworkString('lololo.ply.freeze')
+    --util.AddNetworkString('lololo.ply.freeze')
     util.AddNetworkString('lololo.funcs.reload')
     util.AddNetworkString('lololo.funcs.gameStatus')
     util.AddNetworkString('lololo.funcs.gameStart')
@@ -45,7 +45,9 @@ if SERVER then
     end)
 
     net.Receive('lololo.funcs.gameStatus', function(len, ply)
-        if not IsValid(ply) then return end
+        if not IsValid(ply) then return end 
+        if not ply:GetEyeTrace().Entity:isDoor() or not ply:GetActiveWeapon().isInGame then return end
+
         local isSuccess = net.ReadBool()
         local weapon = ply:GetActiveWeapon()
 
@@ -61,12 +63,10 @@ if SERVER then
             ent:keysUnLock()
         end
 
-        weapon.NextStrike = CurTime() + 5 -- СДЕЛАЙ ПО КОНФИГУ
+        weapon.NextStrike = CurTime() + lololo.config.nextHit
         weapon.lockpickedEnt = nil
     end)
 end
-
-
 
 if CLIENT then
     net.Receive('lololo.sync.speed', function(len, ply)
@@ -247,9 +247,9 @@ if CLIENT then
     local ply = LocalPlayer()
 
     function lololo.isGameFinishSuccess(isSuccess)
-        hook.Remove('HUDPaint', 'lololo.menuCreate.hook')
-        hook.Remove('HUDPaint', 'lololo.pins.draw')
-        hook.Remove('CreateMove', 'lololo.clockwiseChange')
+        hook.Remove('HUDPaint', 'lololo.draw.menu')
+        hook.Remove('HUDPaint', 'lololo.draw.pins')
+        hook.Remove('CreateMove', 'lololo.catch')
 
         net.Start('lololo.funcs.gameStatus')
             net.WriteBool(isSuccess)
@@ -274,13 +274,17 @@ if CLIENT then
         local forDelete = pinCount
         local lockpickCount = lololo.config.lockpickCount
         local isHit = false
+        local attackAngle_min
+        local attackAngle_max
+        local indToRemove
+        local pinAngle
 
         local centerX = ScrW() / 2
         local centerY = ScrH() / 2
 
         local interval = 15
 
-        local function pinAnglesCreate() -- ФАНТОМНЫЕ ПИНИ ИЛИ НЕ РЕГАЕТ!!!!
+        local function pinAnglesCreate()
             local pinAngles = {}
             local ang
             local isValid = false
@@ -297,7 +301,6 @@ if CLIENT then
                     end
 
                     if isValid then
-                        -- table.insert(pinAngles, ang)
                         pinAngles[#pinAngles + 1] = ang
                         break
                     end
@@ -308,10 +311,8 @@ if CLIENT then
         end
 
         local pinAngles = pinAnglesCreate()
-        PrintTable(pinAngles)  -- дебаг принт
-        print('------')
 
-        local function menuCreate()
+        hook.Add('HUDPaint', 'lololo.draw.menu', function()
             draw.RoundedBox(0, 0, 0, 2000, 2000, Color(92, 154, 190, 240))
 
             draw.RoundedBox(360, ScrW()/2 - 150, ScrH()/2 - 150, 300, 300, Color(0, 161, 255, 255))
@@ -322,41 +323,67 @@ if CLIENT then
 
             draw.RotatedBox(posX, posY, 50, 12, angle, Color(34, 34, 34))
 
-            local toRemove = -1 -- TESTTT
+            if clockwise then 
+                angle = angle - lololo.speed -- по часовой
+            else 
+                angle = angle + lololo.speed -- против часовой
+            end 
 
-            hook.Add('Think', 'lololo.clockwiseChange', function() -- добавь в очистку
-                if LocalPlayer():KeyPressed(IN_ATTACK) and not lockAttack then
-                    clockwise = not clockwise 
 
-                    local attackAngle_min = angle - deathZonePin
-                    local attackAngle_max = angle + deathZonePin
+            if angle >= 360 then
+                angle = 0
+            elseif angle <= 0 then
+                angle = 360 
+            end
+
+            draw.RoundedBox(360, ScrW()/2 - 90, ScrH()/2 - 90, 180, 180, Color(0, 161, 255, 255))
+
+            draw.SimpleText('ЛКМ — Подвигать пин', 'CreditsText', centerX + 220, centerY - 50, Color(74, 228, 255))
+            draw.SimpleText('ПКМ — Закрыть меню', 'CreditsText', centerX + 220, centerY - 30, Color(74, 228, 255))
+            draw.SimpleText(string.format('Будьте аккуратны, ваше количество отмычек: %s', lockpickCount), 'CreditsText', centerX + 220, centerY - 10, Color(74, 228, 255))
+        end)
+
+
+        hook.Add('HUDPaint', 'lololo.draw.pins', function()
+            for i = 1, #pinAngles do
+                pinAngle = pinAngles[i]
+                local posX = centerX + math.cos(math.rad(-pinAngle)) * 100
+                local posY = centerY + math.sin(math.rad(-pinAngle)) * 100
+                draw.RotatedBox(posX, posY, 52, 8, pinAngle, Color(0, 205, 205))
+            end
+
+            draw.RoundedBox(360, ScrW()/2 - 90, ScrH()/2 - 90, 180, 180, Color(0, 161, 255, 255))
+        end)
+
+
+
+        hook.Add('CreateMove', 'lololo.catch', function(cmd)
+            if cmd:KeyDown(IN_ATTACK) then 
+                if not lockAttack then
+                    clockwise = not clockwise
+
+                    attackAngle_min = angle - deathZonePin
+                    attackAngle_max = angle + deathZonePin
 
                     for k, v in ipairs(pinAngles) do
                         if v >= attackAngle_min and v <= attackAngle_max then
-                            toRemove = k
-                            --table.remove(pinAngles, k)
-                            --pinAngles[k] = nil
-                            --table.insert(pinAngles, k, nil)
+                            indToRemove = k
                             isHit = true
-
-                            print('Ударил по: ' .. angle) -- дебаг принт
 
                             net.Start('lololo.emitSound')
                                 net.WriteString('lololo.pin')
                             net.SendToServer()
-                                
+
                             break
                         end
                     end
-
+                    
                     if isHit then
-                        table.remove(pinAngles, k)
-                        toRemove = -1
+                        table.remove(pinAngles, indToRemove)
                         forDelete = forDelete - 1
+                        indToRemove = -1
 
                     else
-                        print('Не попал по: ' .. angle) -- debug print
-                        print('Минимум: ' .. attackAngle_min .. ' Максимум: ' .. attackAngle_max)
                         lockpickCount = lockpickCount - 1
                     end
 
@@ -378,108 +405,13 @@ if CLIENT then
                     lockAttack = true
                 end
 
+            else
                 lockAttack = false
-
-                if ply:KeyPressed(IN_ATTACK2) then
-                    lololo.isGameFinishSuccess(false)
-                end
-            end)
-
-
-            if clockwise then 
-                angle = angle - lololo.speed -- по часовой
-            else 
-                angle = angle + lololo.speed -- против часовой
-            end 
-
-
-            if angle >= 360 then
-                angle = 0
-            elseif angle <= 0 then
-                angle = 360 
             end
 
-
-            --print('Текущий: ' .. angle) -- дебаг принт
-
-            draw.RoundedBox(360, ScrW()/2 - 90, ScrH()/2 - 90, 180, 180, Color(0, 161, 255, 255))
-
-            draw.SimpleText('ЛКМ — Подвигать пин', 'CreditsText', centerX + 220, centerY - 50, Color(74, 228, 255))
-            draw.SimpleText('ПКМ — Закрыть меню', 'CreditsText', centerX + 220, centerY - 30, Color(74, 228, 255))
-            draw.SimpleText(string.format('Будьте аккуратны, ваше количество отмычек: %s', lockpickCount), 'CreditsText', centerX + 220, centerY - 10, Color(74, 228, 255))
-        end
-
-        hook.Add('HUDPaint', 'lololo.pins.draw', function()
-            for i = 1, pinCount do
-                local pinAngle = pinAngles[i]
-                if pinAngle ~= nil then
-                    local posX = centerX + math.cos(math.rad(-pinAngle)) * 100
-                    local posY = centerY + math.sin(math.rad(-pinAngle)) * 100
-                    draw.RotatedBox(posX, posY, 52, 8, pinAngle, Color(0, 205, 205))
-                end
+            if cmd:KeyDown(IN_ATTACK2) then
+                lololo.isGameFinishSuccess(false)
             end
-
-            draw.RoundedBox(360, ScrW()/2 - 90, ScrH()/2 - 90, 180, 180, Color(0, 161, 255, 255))
         end)
-
-        local function MenuCreateHook(speed) -- замыкание (11.08.26 p.s типо легаси код, понятия не имею как и почему это работало еще год назад, работает не трогай)
-            hook.Add('HUDPaint', 'lololo.menuCreate.hook', menuCreate) 
-        end
-
-        MenuCreateHook(lololo.speed)
     end
 end
-
-
-
-
--- if SERVER then
---     net.Receive('lockpick.ply.Freeze', function()
---         local plyFreeze = net.ReadEntity()
---         plyFreeze:Freeze(false)
-    
---     end)
--- end
-
-
--- local function clearAll()
---     hook.Remove('HUDPaint', 'MenuCreateHook')
---     hook.Remove('HUDPaint', 'pins.Draw')
---     hook.Remove('CreateMove', 'clockwiseChange')
-
---     net.Start('lockpick.ply.Freeze')
---         net.WriteEntity(LocalPlayer())
---     net.SendToServer()
--- end
-
-----------------------------------------------------------------------
-
-
--- if SERVER then
---     hook.Add('PlayerSay', 'lockpick.Funcs', function(ply, txt)
---         if string.sub(string.lower(txt), 1, 12) == '!setpincount' then
---             local txt = string.reverse(txt)
---             local txtInt = string.sub(txt, 1, 2)
---             local txtInt = string.reverse(txtInt)
-
---             if math.sqrt(txtInt) == 0 or math.abs(txtInt) > 15 or math.abs(txtInt) < 1 then
---                 ply:ChatPrint('Количество пинов должно быть в пределах от 1 до 15.')
---                 return ''
-
---             else
---                 local txtInt = math.abs(txtInt)
-
---                 net.Start('lockpick.Funcs')
---                     net.WriteString('pin')
---                     net.WriteString(txtInt, 5)
---                 net.Send(ply)
-
---                 ply:ChatPrint(string.format('Количество пинов %s', txtInt))
---                 return ''
---             end
-
---         end
---     end)
-
-
--- end

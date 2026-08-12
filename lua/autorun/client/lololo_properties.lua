@@ -1,10 +1,13 @@
 
 
 if SERVER then
-    net.Receive('lololo.funcs.setPinCount', function()
+    net.Receive('lololo.funcs.setPinCount', function(len, ply)
+        print('poluch')
+        if not ply:IsAdmin() then return end
         local pinCount = net.ReadInt(8)
-        local ent = net.ReadEntity()
+        --if not pinCount >= lololo.config.minPinCount or not pinCount <= lololo.config.maxPinCount then return end
 
+        local ent = net.ReadEntity()
         if not IsValid(ent) then return end
 
         local min = lololo.config.minPinCount
@@ -53,7 +56,6 @@ properties.Add("lololo_edit_pins", {
 
             if value == lololo.config.defaultPinCount then return end
 
-            print('test')
             net.Start('lololo.funcs.setPinCount')
                 net.WriteInt(value, 8)
                 net.WriteEntity(ent)
