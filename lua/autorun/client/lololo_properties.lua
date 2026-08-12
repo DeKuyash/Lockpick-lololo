@@ -2,7 +2,6 @@
 
 if SERVER then
     net.Receive('lololo.funcs.setPinCount', function(len, ply)
-        print('poluch')
         if not ply:IsAdmin() then return end
         local pinCount = net.ReadInt(8)
 
