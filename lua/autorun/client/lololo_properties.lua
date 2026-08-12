@@ -5,7 +5,6 @@ if SERVER then
         print('poluch')
         if not ply:IsAdmin() then return end
         local pinCount = net.ReadInt(8)
-        --if not pinCount >= lololo.config.minPinCount or not pinCount <= lololo.config.maxPinCount then return end
 
         local ent = net.ReadEntity()
         if not IsValid(ent) then return end
