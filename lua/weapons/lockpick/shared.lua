@@ -19,7 +19,6 @@ if SERVER then
     sound.Add({name = 'lololo.success', channel = CHAN_AUTO, volume = 1, level = 80, sound = 'lockpick/success.wav'})
     sound.Add({name = 'lololo.pin', channel = CHAN_AUTO, volume = 1, level = 80, sound = 'lockpick/pin.wav'})
 
-    --util.AddNetworkString('lololo.ply.freeze')
     util.AddNetworkString('lololo.funcs.reload')
     util.AddNetworkString('lololo.funcs.gameStatus')
     util.AddNetworkString('lololo.funcs.gameStart')
